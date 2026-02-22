@@ -36,6 +36,20 @@ This tool backs up configs, databases, and compose files every night. When somet
 
 Backups are compressed tarballs stored in `~/Media/backups/`. Old backups are pruned automatically (default: keep 14 days).
 
+## See It In Action
+
+<details>
+<summary>Backup demo</summary>
+<br>
+<img src="demo.gif" alt="Backup demo" width="700" />
+</details>
+
+<details>
+<summary>Restore --list</summary>
+<br>
+<img src="restore-demo.gif" alt="Restore list demo" width="700" />
+</details>
+
 ## Quick Start
 
 ```bash
