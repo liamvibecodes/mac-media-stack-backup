@@ -30,14 +30,21 @@ usage() {
     echo "  bash restore.sh --latest"
     echo "  bash restore.sh 20260222-020000"
     echo "  bash restore.sh backup-20260222-020000.tar.gz"
-    exit 0
+    exit "${1:-0}"
 }
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --list) LIST_MODE=true; shift ;;
         --latest) LATEST_MODE=true; shift ;;
-        --path) MEDIA_DIR="$2"; shift 2 ;;
+        --path)
+            if [[ $# -lt 2 ]]; then
+                echo -e "${RED}ERR${NC} Missing value for --path"
+                usage 1
+            fi
+            MEDIA_DIR="$2"
+            shift 2
+            ;;
         --help) usage ;;
         -*) echo -e "${RED}ERR${NC} Unknown option: $1"; exit 1 ;;
         *) BACKUP_TARGET="$1"; shift ;;
@@ -63,7 +70,7 @@ if $LIST_MODE; then
     echo ""
 
     FOUND=0
-    for f in $(ls -t "$BACKUP_DIR"/backup-*.tar.gz 2>/dev/null); do
+    while IFS= read -r f; do
         name=$(basename "$f")
         size=$(du -sh "$f" | cut -f1)
         date_part=$(echo "$name" | sed 's/backup-\([0-9]*\)-\([0-9]*\).*/\1/')
@@ -71,7 +78,7 @@ if $LIST_MODE; then
         formatted_date="${date_part:0:4}-${date_part:4:2}-${date_part:6:2} ${time_part:0:2}:${time_part:2:2}:${time_part:4:2}"
         echo -e "  ${GREEN}$name${NC}  ($size)  $formatted_date"
         FOUND=$((FOUND + 1))
-    done
+    done < <(ls -1t "$BACKUP_DIR"/backup-*.tar.gz 2>/dev/null)
 
     if [[ $FOUND -eq 0 ]]; then
         echo -e "  ${YELLOW}No backups found${NC}"
@@ -142,8 +149,12 @@ trap cleanup EXIT
 # ==============================
 echo -e "${CYAN}--- Extracting ---${NC}"
 tar -xzf "$BACKUP_FILE" -C "$TEMP_DIR"
-BACKUP_ROOT=$(ls "$TEMP_DIR")
-EXTRACTED="$TEMP_DIR/$BACKUP_ROOT"
+BACKUP_ROOT=$(find "$TEMP_DIR" -mindepth 1 -maxdepth 1 -type d | head -1)
+if [[ -z "$BACKUP_ROOT" || ! -d "$BACKUP_ROOT" ]]; then
+    echo -e "${RED}ERR${NC}  Backup archive did not contain a valid root directory"
+    exit 1
+fi
+EXTRACTED="$BACKUP_ROOT"
 echo -e "${GREEN}OK${NC}   Extracted to temp directory"
 echo ""
 
@@ -152,9 +163,19 @@ echo ""
 # ==============================
 echo -e "${CYAN}--- Stopping Containers ---${NC}"
 
-if command -v docker &>/dev/null && [[ -f "$MEDIA_DIR/docker-compose.yml" || -f "$MEDIA_DIR/docker-compose.yaml" ]]; then
-    (cd "$MEDIA_DIR" && docker compose stop 2>/dev/null) || true
-    echo -e "${GREEN}OK${NC}   Containers stopped"
+STOP_COMPOSE_FILE=""
+if [[ -f "$MEDIA_DIR/docker-compose.yml" ]]; then
+    STOP_COMPOSE_FILE="$MEDIA_DIR/docker-compose.yml"
+elif [[ -f "$MEDIA_DIR/docker-compose.yaml" ]]; then
+    STOP_COMPOSE_FILE="$MEDIA_DIR/docker-compose.yaml"
+fi
+
+if command -v docker &>/dev/null && [[ -n "$STOP_COMPOSE_FILE" ]]; then
+    if (cd "$MEDIA_DIR" && docker compose stop >/dev/null 2>&1); then
+        echo -e "${GREEN}OK${NC}   Containers stopped"
+    else
+        echo -e "${YELLOW}WRN${NC}  Failed to stop containers cleanly, continuing restore"
+    fi
 else
     echo -e "${YELLOW}WRN${NC}  No compose file or Docker not found, skipping container stop"
 fi
@@ -239,15 +260,27 @@ echo ""
 # ==============================
 echo -e "${CYAN}--- Restarting Containers ---${NC}"
 
-if command -v docker &>/dev/null && [[ -f "$MEDIA_DIR/docker-compose.yml" || -f "$MEDIA_DIR/docker-compose.yaml" ]]; then
-    (cd "$MEDIA_DIR" && docker compose up -d 2>/dev/null) || true
-    echo -e "${GREEN}OK${NC}   Containers started"
-    echo ""
+START_COMPOSE_FILE=""
+if [[ -f "$MEDIA_DIR/docker-compose.yml" ]]; then
+    START_COMPOSE_FILE="$MEDIA_DIR/docker-compose.yml"
+elif [[ -f "$MEDIA_DIR/docker-compose.yaml" ]]; then
+    START_COMPOSE_FILE="$MEDIA_DIR/docker-compose.yaml"
+fi
 
-    # Health check
-    echo -e "${CYAN}--- Health Check ---${NC}"
-    sleep 3
-    (cd "$MEDIA_DIR" && docker compose ps 2>/dev/null) || true
+if command -v docker &>/dev/null && [[ -n "$START_COMPOSE_FILE" ]]; then
+    if (cd "$MEDIA_DIR" && docker compose up -d >/dev/null 2>&1); then
+        echo -e "${GREEN}OK${NC}   Containers started"
+        echo ""
+
+        # Health check
+        echo -e "${CYAN}--- Health Check ---${NC}"
+        sleep 3
+        (cd "$MEDIA_DIR" && docker compose ps 2>/dev/null) || true
+    else
+        echo -e "${RED}ERR${NC}  Restore completed, but container restart failed."
+        echo -e "${RED}ERR${NC}  Check compose syntax/secrets and run: (cd \"$MEDIA_DIR\" && docker compose up -d)"
+        exit 1
+    fi
 else
     echo -e "${YELLOW}WRN${NC}  No compose file or Docker not found, skipping restart"
 fi

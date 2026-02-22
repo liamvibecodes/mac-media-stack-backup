@@ -29,7 +29,7 @@ This tool backs up configs, databases, and compose files every night. When somet
 | Item | Details |
 |------|---------|
 | **Config files** | config.xml, config.yml, settings.json, *.conf from each service |
-| **Databases** | All *.db files (Sonarr, Radarr, Prowlarr, Lidarr, Bazarr, etc.) |
+| **Databases** | All *.db files (Sonarr, Radarr, Prowlarr, Lidarr, Bazarr, etc.), snapshot-backed with sqlite3 when available |
 | **Compose file** | docker-compose.yml |
 | **Environment** | .env (sensitive values redacted) |
 | **Container state** | Snapshot of running containers at backup time |
@@ -85,6 +85,7 @@ bash restore.sh 20260222-020000
 ```
 
 The restore process stops your containers, copies configs and databases back, restarts everything, and runs a health check.
+If container restart fails, the script exits non-zero and prints clear remediation steps instead of claiming success.
 
 **Note:** .env values are redacted in backups for security. After restoring, check your .env file and re-add any secrets if needed.
 

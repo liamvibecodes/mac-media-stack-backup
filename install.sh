@@ -33,12 +33,19 @@ usage() {
     echo "  bash install.sh              # Install nightly backup at 2am"
     echo "  bash install.sh --hour 3     # Install nightly backup at 3am"
     echo "  bash install.sh --uninstall  # Remove scheduled backup"
-    exit 0
+    exit "${1:-0}"
 }
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --hour) HOUR="$2"; shift 2 ;;
+        --hour)
+            if [[ $# -lt 2 ]]; then
+                echo -e "${RED}ERR${NC} Missing value for --hour"
+                usage 1
+            fi
+            HOUR="$2"
+            shift 2
+            ;;
         --uninstall) UNINSTALL=true; shift ;;
         --help) usage ;;
         *) echo -e "${RED}ERR${NC} Unknown option: $1"; exit 1 ;;
@@ -81,6 +88,11 @@ fi
 # ==============================
 if [[ ! -f "$BACKUP_SCRIPT" ]]; then
     echo -e "${RED}ERR${NC}  backup.sh not found at $BACKUP_SCRIPT"
+    exit 1
+fi
+
+if ! [[ "$HOUR" =~ ^[0-9]+$ ]]; then
+    echo -e "${RED}ERR${NC}  Hour must be a whole number between 0 and 23"
     exit 1
 fi
 

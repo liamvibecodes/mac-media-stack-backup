@@ -21,13 +21,27 @@ usage() {
     echo "  --path DIR     Media directory (default: ~/Media)"
     echo "  --keep DAYS    Days of backups to keep (default: 14)"
     echo "  --help         Show this help"
-    exit 0
+    exit "${1:-0}"
 }
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --path) MEDIA_DIR="$2"; shift 2 ;;
-        --keep) KEEP_DAYS="$2"; shift 2 ;;
+        --path)
+            if [[ $# -lt 2 ]]; then
+                echo -e "${RED}ERR${NC} Missing value for --path"
+                usage 1
+            fi
+            MEDIA_DIR="$2"
+            shift 2
+            ;;
+        --keep)
+            if [[ $# -lt 2 ]]; then
+                echo -e "${RED}ERR${NC} Missing value for --keep"
+                usage 1
+            fi
+            KEEP_DAYS="$2"
+            shift 2
+            ;;
         --help) usage ;;
         *) echo -e "${RED}ERR${NC} Unknown option: $1"; exit 1 ;;
     esac
@@ -61,7 +75,12 @@ if [[ ! -d "$MEDIA_DIR" ]]; then
     exit 1
 fi
 
-mkdir -p "$BACKUP_DIR" "$LOG_DIR" "$BACKUP_STAGING"
+if ! [[ "$KEEP_DAYS" =~ ^[0-9]+$ ]]; then
+    echo -e "${RED}ERR${NC}  --keep must be a whole number"
+    exit 1
+fi
+
+mkdir -p "$BACKUP_DIR" "$LOG_DIR" "$BACKUP_STAGING" "$BACKUP_STAGING/configs" "$BACKUP_STAGING/databases"
 
 # ==============================
 # Config files
@@ -91,13 +110,30 @@ echo ""
 # ==============================
 echo -e "${CYAN}--- Databases ---${NC}"
 
+# Use sqlite online backup when available to avoid inconsistent hot copies.
+backup_db_file() {
+    local src="$1"
+    local dst="$2"
+    local rel="$3"
+
+    if command -v sqlite3 &>/dev/null; then
+        if sqlite3 "$src" ".timeout 5000" ".backup \"$dst\"" >/dev/null 2>&1; then
+            echo -e "${GREEN}OK${NC}   Snapshot database: $rel"
+            return 0
+        fi
+        echo -e "${YELLOW}WRN${NC}  sqlite3 snapshot failed for $rel, falling back to file copy"
+    fi
+
+    cp "$src" "$dst"
+    echo -e "${GREEN}OK${NC}   Copied database: $rel"
+}
+
 find "$MEDIA_DIR" -maxdepth 3 -type f -name "*.db" \
     ! -path "*/backups/*" ! -path "*/logs/*" 2>/dev/null | while read -r file; do
     rel_path="${file#$MEDIA_DIR/}"
     dest_dir="$BACKUP_STAGING/databases/$(dirname "$rel_path")"
     mkdir -p "$dest_dir"
-    cp "$file" "$dest_dir/"
-    echo -e "${GREEN}OK${NC}   Copied database: $rel_path"
+    backup_db_file "$file" "$dest_dir/$(basename "$file")" "$rel_path"
 done
 
 DB_COUNT=$(find "$BACKUP_STAGING/databases" -type f 2>/dev/null | wc -l | tr -d ' ')
@@ -166,11 +202,9 @@ echo ""
 # ==============================
 echo -e "${CYAN}--- Pruning Old Backups ---${NC}"
 
-PRUNED=0
 find "$BACKUP_DIR" -name "backup-*.tar.gz" -type f -mtime +"$KEEP_DAYS" 2>/dev/null | while read -r old; do
     rm -f "$old"
     echo -e "${YELLOW}DEL${NC}  Removed $(basename "$old")"
-    PRUNED=$((PRUNED + 1))
 done
 
 REMAINING=$(find "$BACKUP_DIR" -name "backup-*.tar.gz" -type f 2>/dev/null | wc -l | tr -d ' ')
