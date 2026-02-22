@@ -16,3 +16,13 @@ jobs:
           bash -n backup.sh
           bash -n restore.sh
           bash -n install.sh
+
+      - name: Smoke test backup/restore scripts
+        run: |
+          TMP_MEDIA="$(mktemp -d)"
+          mkdir -p "$TMP_MEDIA/config/sonarr" "$TMP_MEDIA/logs"
+          printf '<Config>ok</Config>\n' > "$TMP_MEDIA/config/sonarr/config.xml"
+          printf 'db\n' > "$TMP_MEDIA/config/sonarr/sonarr.db"
+          printf 'WIREGUARD_PRIVATE_KEY=secret\n' > "$TMP_MEDIA/.env"
+          bash backup.sh --path "$TMP_MEDIA" --stack-dir "$TMP_MEDIA" --keep 1
+          bash restore.sh --list --path "$TMP_MEDIA"

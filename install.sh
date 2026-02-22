@@ -10,6 +10,7 @@ CYAN='\033[0;36m'
 NC='\033[0m'
 
 HOUR=2
+KEEP_DAYS=14
 UNINSTALL=false
 LABEL="com.mac-media-stack.backup"
 PLIST_DIR="$HOME/Library/LaunchAgents"
@@ -17,6 +18,8 @@ PLIST_PATH="$PLIST_DIR/$LABEL.plist"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 BACKUP_SCRIPT="$SCRIPT_DIR/backup.sh"
 MEDIA_DIR="$HOME/Media"
+STACK_DIR="$MEDIA_DIR"
+STACK_DIR_SET=false
 LOG_DIR="$MEDIA_DIR/logs"
 
 usage() {
@@ -25,9 +28,12 @@ usage() {
     echo "Install or remove scheduled nightly backups via launchd."
     echo ""
     echo "Options:"
-    echo "  --hour HOUR      Hour to run backup (0-23, default: 2)"
-    echo "  --uninstall      Remove the scheduled backup"
-    echo "  --help           Show this help"
+    echo "  --hour HOUR       Hour to run backup (0-23, default: 2)"
+    echo "  --path DIR        Media directory passed to backup.sh (default: ~/Media)"
+    echo "  --stack-dir DIR   Stack directory passed to backup.sh (default: --path)"
+    echo "  --keep DAYS       Backup retention passed to backup.sh (default: 14)"
+    echo "  --uninstall       Remove the scheduled backup"
+    echo "  --help            Show this help"
     echo ""
     echo "Examples:"
     echo "  bash install.sh              # Install nightly backup at 2am"
@@ -46,11 +52,43 @@ while [[ $# -gt 0 ]]; do
             HOUR="$2"
             shift 2
             ;;
+        --path)
+            if [[ $# -lt 2 ]]; then
+                echo -e "${RED}ERR${NC} Missing value for --path"
+                usage 1
+            fi
+            MEDIA_DIR="$2"
+            shift 2
+            ;;
+        --stack-dir)
+            if [[ $# -lt 2 ]]; then
+                echo -e "${RED}ERR${NC} Missing value for --stack-dir"
+                usage 1
+            fi
+            STACK_DIR="$2"
+            STACK_DIR_SET=true
+            shift 2
+            ;;
+        --keep)
+            if [[ $# -lt 2 ]]; then
+                echo -e "${RED}ERR${NC} Missing value for --keep"
+                usage 1
+            fi
+            KEEP_DAYS="$2"
+            shift 2
+            ;;
         --uninstall) UNINSTALL=true; shift ;;
         --help) usage ;;
         *) echo -e "${RED}ERR${NC} Unknown option: $1"; exit 1 ;;
     esac
 done
+
+MEDIA_DIR="${MEDIA_DIR/#\~/$HOME}"
+if [[ "$STACK_DIR_SET" != true ]]; then
+    STACK_DIR="$MEDIA_DIR"
+fi
+STACK_DIR="${STACK_DIR/#\~/$HOME}"
+LOG_DIR="$MEDIA_DIR/logs"
 
 echo ""
 echo -e "${CYAN}==============================${NC}"
@@ -101,6 +139,11 @@ if [[ "$HOUR" -lt 0 || "$HOUR" -gt 23 ]]; then
     exit 1
 fi
 
+if ! [[ "$KEEP_DAYS" =~ ^[0-9]+$ ]]; then
+    echo -e "${RED}ERR${NC}  --keep must be a whole number"
+    exit 1
+fi
+
 # ==============================
 # Create directories
 # ==============================
@@ -111,6 +154,9 @@ mkdir -p "$PLIST_DIR" "$LOG_DIR"
 # ==============================
 echo -e "${CYAN}INF${NC}  Backup script: $BACKUP_SCRIPT"
 echo -e "${CYAN}INF${NC}  Schedule: daily at ${HOUR}:00"
+echo -e "${CYAN}INF${NC}  Media directory: $MEDIA_DIR"
+echo -e "${CYAN}INF${NC}  Stack directory: $STACK_DIR"
+echo -e "${CYAN}INF${NC}  Retention: $KEEP_DAYS day(s)"
 echo ""
 
 cat > "$PLIST_PATH" <<EOF
@@ -124,6 +170,12 @@ cat > "$PLIST_PATH" <<EOF
     <array>
         <string>/bin/bash</string>
         <string>$BACKUP_SCRIPT</string>
+        <string>--path</string>
+        <string>$MEDIA_DIR</string>
+        <string>--stack-dir</string>
+        <string>$STACK_DIR</string>
+        <string>--keep</string>
+        <string>$KEEP_DAYS</string>
     </array>
     <key>StartCalendarInterval</key>
     <dict>

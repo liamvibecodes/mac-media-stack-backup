@@ -10,6 +10,8 @@ CYAN='\033[0;36m'
 NC='\033[0m'
 
 MEDIA_DIR="$HOME/Media"
+STACK_DIR="$MEDIA_DIR"
+STACK_DIR_SET=false
 LIST_MODE=false
 LATEST_MODE=false
 BACKUP_TARGET=""
@@ -23,6 +25,7 @@ usage() {
     echo "  --list         List available backups"
     echo "  --latest       Restore the most recent backup"
     echo "  --path DIR     Media directory (default: ~/Media)"
+    echo "  --stack-dir DIR  Stack directory with docker-compose/.env (default: --path)"
     echo "  --help         Show this help"
     echo ""
     echo "Examples:"
@@ -45,6 +48,15 @@ while [[ $# -gt 0 ]]; do
             MEDIA_DIR="$2"
             shift 2
             ;;
+        --stack-dir)
+            if [[ $# -lt 2 ]]; then
+                echo -e "${RED}ERR${NC} Missing value for --stack-dir"
+                usage 1
+            fi
+            STACK_DIR="$2"
+            STACK_DIR_SET=true
+            shift 2
+            ;;
         --help) usage ;;
         -*) echo -e "${RED}ERR${NC} Unknown option: $1"; exit 1 ;;
         *) BACKUP_TARGET="$1"; shift ;;
@@ -52,6 +64,10 @@ while [[ $# -gt 0 ]]; do
 done
 
 MEDIA_DIR="${MEDIA_DIR/#\~/$HOME}"
+if [[ "$STACK_DIR_SET" != true ]]; then
+    STACK_DIR="$MEDIA_DIR"
+fi
+STACK_DIR="${STACK_DIR/#\~/$HOME}"
 BACKUP_DIR="$MEDIA_DIR/backups"
 
 if [[ ! -d "$BACKUP_DIR" ]]; then
@@ -127,6 +143,7 @@ echo -e "${CYAN}==============================${NC}"
 echo ""
 echo -e "${CYAN}INF${NC}  Backup: $(basename "$BACKUP_FILE")"
 echo -e "${CYAN}INF${NC}  Media directory: $MEDIA_DIR"
+echo -e "${CYAN}INF${NC}  Stack directory: $STACK_DIR"
 echo ""
 
 # Confirm
@@ -164,14 +181,14 @@ echo ""
 echo -e "${CYAN}--- Stopping Containers ---${NC}"
 
 STOP_COMPOSE_FILE=""
-if [[ -f "$MEDIA_DIR/docker-compose.yml" ]]; then
-    STOP_COMPOSE_FILE="$MEDIA_DIR/docker-compose.yml"
-elif [[ -f "$MEDIA_DIR/docker-compose.yaml" ]]; then
-    STOP_COMPOSE_FILE="$MEDIA_DIR/docker-compose.yaml"
+if [[ -f "$STACK_DIR/docker-compose.yml" ]]; then
+    STOP_COMPOSE_FILE="$STACK_DIR/docker-compose.yml"
+elif [[ -f "$STACK_DIR/docker-compose.yaml" ]]; then
+    STOP_COMPOSE_FILE="$STACK_DIR/docker-compose.yaml"
 fi
 
 if command -v docker &>/dev/null && [[ -n "$STOP_COMPOSE_FILE" ]]; then
-    if (cd "$MEDIA_DIR" && docker compose stop >/dev/null 2>&1); then
+    if (cd "$STACK_DIR" && docker compose stop >/dev/null 2>&1); then
         echo -e "${GREEN}OK${NC}   Containers stopped"
     else
         echo -e "${YELLOW}WRN${NC}  Failed to stop containers cleanly, continuing restore"
@@ -229,10 +246,12 @@ echo ""
 echo -e "${CYAN}--- Restoring Compose File ---${NC}"
 
 if [[ -f "$EXTRACTED/docker-compose.yml" ]]; then
-    cp "$EXTRACTED/docker-compose.yml" "$MEDIA_DIR/"
+    mkdir -p "$STACK_DIR"
+    cp "$EXTRACTED/docker-compose.yml" "$STACK_DIR/"
     echo -e "${GREEN}OK${NC}   Restored docker-compose.yml"
 elif [[ -f "$EXTRACTED/docker-compose.yaml" ]]; then
-    cp "$EXTRACTED/docker-compose.yaml" "$MEDIA_DIR/"
+    mkdir -p "$STACK_DIR"
+    cp "$EXTRACTED/docker-compose.yaml" "$STACK_DIR/"
     echo -e "${GREEN}OK${NC}   Restored docker-compose.yaml"
 else
     echo -e "${YELLOW}WRN${NC}  No compose file in backup"
@@ -248,7 +267,8 @@ if [[ -f "$EXTRACTED/.env.redacted" ]]; then
     echo -e "${YELLOW}WRN${NC}  Backup contains a REDACTED .env file."
     echo -e "${YELLOW}WRN${NC}  Sensitive values (passwords, keys, tokens) were stripped during backup."
     echo -e "${YELLOW}WRN${NC}  Check your .env file and re-add any secrets manually."
-    cp "$EXTRACTED/.env.redacted" "$MEDIA_DIR/.env.redacted"
+    mkdir -p "$STACK_DIR"
+    cp "$EXTRACTED/.env.redacted" "$STACK_DIR/.env.redacted"
     echo -e "${GREEN}OK${NC}   Saved .env.redacted for reference"
 else
     echo -e "${CYAN}INF${NC}  No .env in backup"
@@ -261,24 +281,24 @@ echo ""
 echo -e "${CYAN}--- Restarting Containers ---${NC}"
 
 START_COMPOSE_FILE=""
-if [[ -f "$MEDIA_DIR/docker-compose.yml" ]]; then
-    START_COMPOSE_FILE="$MEDIA_DIR/docker-compose.yml"
-elif [[ -f "$MEDIA_DIR/docker-compose.yaml" ]]; then
-    START_COMPOSE_FILE="$MEDIA_DIR/docker-compose.yaml"
+if [[ -f "$STACK_DIR/docker-compose.yml" ]]; then
+    START_COMPOSE_FILE="$STACK_DIR/docker-compose.yml"
+elif [[ -f "$STACK_DIR/docker-compose.yaml" ]]; then
+    START_COMPOSE_FILE="$STACK_DIR/docker-compose.yaml"
 fi
 
 if command -v docker &>/dev/null && [[ -n "$START_COMPOSE_FILE" ]]; then
-    if (cd "$MEDIA_DIR" && docker compose up -d >/dev/null 2>&1); then
+    if (cd "$STACK_DIR" && docker compose up -d >/dev/null 2>&1); then
         echo -e "${GREEN}OK${NC}   Containers started"
         echo ""
 
         # Health check
         echo -e "${CYAN}--- Health Check ---${NC}"
         sleep 3
-        (cd "$MEDIA_DIR" && docker compose ps 2>/dev/null) || true
+        (cd "$STACK_DIR" && docker compose ps 2>/dev/null) || true
     else
         echo -e "${RED}ERR${NC}  Restore completed, but container restart failed."
-        echo -e "${RED}ERR${NC}  Check compose syntax/secrets and run: (cd \"$MEDIA_DIR\" && docker compose up -d)"
+        echo -e "${RED}ERR${NC}  Check compose syntax/secrets and run: (cd \"$STACK_DIR\" && docker compose up -d)"
         exit 1
     fi
 else

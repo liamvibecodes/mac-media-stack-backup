@@ -10,6 +10,8 @@ CYAN='\033[0;36m'
 NC='\033[0m'
 
 MEDIA_DIR="$HOME/Media"
+STACK_DIR="$MEDIA_DIR"
+STACK_DIR_SET=false
 KEEP_DAYS=14
 
 usage() {
@@ -18,8 +20,9 @@ usage() {
     echo "Back up your *arr Docker stack configs, databases, and compose files."
     echo ""
     echo "Options:"
-    echo "  --path DIR     Media directory (default: ~/Media)"
-    echo "  --keep DAYS    Days of backups to keep (default: 14)"
+    echo "  --path DIR       Media directory (default: ~/Media)"
+    echo "  --stack-dir DIR  Stack directory with docker-compose/.env (default: --path)"
+    echo "  --keep DAYS      Days of backups to keep (default: 14)"
     echo "  --help         Show this help"
     exit "${1:-0}"
 }
@@ -32,6 +35,15 @@ while [[ $# -gt 0 ]]; do
                 usage 1
             fi
             MEDIA_DIR="$2"
+            shift 2
+            ;;
+        --stack-dir)
+            if [[ $# -lt 2 ]]; then
+                echo -e "${RED}ERR${NC} Missing value for --stack-dir"
+                usage 1
+            fi
+            STACK_DIR="$2"
+            STACK_DIR_SET=true
             shift 2
             ;;
         --keep)
@@ -48,6 +60,10 @@ while [[ $# -gt 0 ]]; do
 done
 
 MEDIA_DIR="${MEDIA_DIR/#\~/$HOME}"
+if [[ "$STACK_DIR_SET" != true ]]; then
+    STACK_DIR="$MEDIA_DIR"
+fi
+STACK_DIR="${STACK_DIR/#\~/$HOME}"
 BACKUP_DIR="$MEDIA_DIR/backups"
 LOG_DIR="$MEDIA_DIR/logs"
 TIMESTAMP=$(date +"%Y%m%d-%H%M%S")
@@ -66,12 +82,18 @@ echo -e "${CYAN}  Mac Media Stack Backup${NC}"
 echo -e "${CYAN}==============================${NC}"
 echo ""
 echo -e "${CYAN}INF${NC}  Media directory: $MEDIA_DIR"
+echo -e "${CYAN}INF${NC}  Stack directory: $STACK_DIR"
 echo -e "${CYAN}INF${NC}  Timestamp: $TIMESTAMP"
 echo ""
 
 # Validate media directory
 if [[ ! -d "$MEDIA_DIR" ]]; then
     echo -e "${RED}ERR${NC}  Media directory not found: $MEDIA_DIR"
+    exit 1
+fi
+
+if [[ ! -d "$STACK_DIR" ]]; then
+    echo -e "${RED}ERR${NC}  Stack directory not found: $STACK_DIR"
     exit 1
 fi
 
@@ -145,14 +167,14 @@ echo ""
 # ==============================
 echo -e "${CYAN}--- Compose File ---${NC}"
 
-if [[ -f "$MEDIA_DIR/docker-compose.yml" ]]; then
-    cp "$MEDIA_DIR/docker-compose.yml" "$BACKUP_STAGING/"
+if [[ -f "$STACK_DIR/docker-compose.yml" ]]; then
+    cp "$STACK_DIR/docker-compose.yml" "$BACKUP_STAGING/"
     echo -e "${GREEN}OK${NC}   Copied docker-compose.yml"
-elif [[ -f "$MEDIA_DIR/docker-compose.yaml" ]]; then
-    cp "$MEDIA_DIR/docker-compose.yaml" "$BACKUP_STAGING/"
+elif [[ -f "$STACK_DIR/docker-compose.yaml" ]]; then
+    cp "$STACK_DIR/docker-compose.yaml" "$BACKUP_STAGING/"
     echo -e "${GREEN}OK${NC}   Copied docker-compose.yaml"
 else
-    echo -e "${YELLOW}WRN${NC}  No docker-compose file found in $MEDIA_DIR"
+    echo -e "${YELLOW}WRN${NC}  No docker-compose file found in $STACK_DIR"
 fi
 echo ""
 
@@ -161,12 +183,12 @@ echo ""
 # ==============================
 echo -e "${CYAN}--- Environment File ---${NC}"
 
-if [[ -f "$MEDIA_DIR/.env" ]]; then
-    grep -ivE '(password|key|secret|token)' "$MEDIA_DIR/.env" > "$BACKUP_STAGING/.env.redacted" 2>/dev/null || true
-    REDACTED=$(grep -ciE '(password|key|secret|token)' "$MEDIA_DIR/.env" 2>/dev/null || echo "0")
+if [[ -f "$STACK_DIR/.env" ]]; then
+    grep -ivE '(password|key|secret|token)' "$STACK_DIR/.env" > "$BACKUP_STAGING/.env.redacted" 2>/dev/null || true
+    REDACTED=$(grep -ciE '(password|key|secret|token)' "$STACK_DIR/.env" 2>/dev/null || echo "0")
     echo -e "${GREEN}OK${NC}   Copied .env ($REDACTED sensitive line(s) redacted)"
 else
-    echo -e "${YELLOW}WRN${NC}  No .env file found"
+    echo -e "${YELLOW}WRN${NC}  No .env file found in $STACK_DIR"
 fi
 echo ""
 
@@ -176,11 +198,21 @@ echo ""
 echo -e "${CYAN}--- Container State ---${NC}"
 
 if command -v docker &>/dev/null; then
-    if docker compose ls &>/dev/null 2>&1; then
-        (cd "$MEDIA_DIR" && docker compose ps 2>/dev/null) > "$BACKUP_STAGING/container-state.txt" || true
-        echo -e "${GREEN}OK${NC}   Captured container state"
+    COMPOSE_STATE_FILE=""
+    if [[ -f "$STACK_DIR/docker-compose.yml" ]]; then
+        COMPOSE_STATE_FILE="$STACK_DIR/docker-compose.yml"
+    elif [[ -f "$STACK_DIR/docker-compose.yaml" ]]; then
+        COMPOSE_STATE_FILE="$STACK_DIR/docker-compose.yaml"
+    fi
+
+    if [[ -n "$COMPOSE_STATE_FILE" ]] && docker compose ls &>/dev/null 2>&1; then
+        if (cd "$STACK_DIR" && docker compose ps 2>/dev/null) > "$BACKUP_STAGING/container-state.txt"; then
+            echo -e "${GREEN}OK${NC}   Captured container state"
+        else
+            echo -e "${YELLOW}WRN${NC}  Could not capture container state from $STACK_DIR"
+        fi
     else
-        echo -e "${YELLOW}WRN${NC}  Docker Compose not available, skipping container state"
+        echo -e "${YELLOW}WRN${NC}  Compose file not found or Docker Compose unavailable; skipping container state"
     fi
 else
     echo -e "${YELLOW}WRN${NC}  Docker not found, skipping container state"

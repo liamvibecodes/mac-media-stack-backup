@@ -34,7 +34,7 @@ This tool backs up configs, databases, and compose files every night. When somet
 | **Environment** | .env (sensitive values redacted) |
 | **Container state** | Snapshot of running containers at backup time |
 
-Backups are compressed tarballs stored in `~/Media/backups/`. Old backups are pruned automatically (default: keep 14 days).
+Backups are compressed tarballs stored in `~/Media/backups/` (or your custom `--path`). Old backups are pruned automatically (default: keep 14 days).
 
 ## See It In Action
 
@@ -70,6 +70,7 @@ Customize the schedule:
 
 ```bash
 bash install.sh --hour 3    # run at 3am instead
+bash install.sh --path /Volumes/External/Media --keep 30
 ```
 
 Remove the scheduled backup:
@@ -110,6 +111,15 @@ All scripts default to `~/Media`. Use `--path` for a different location:
 ```bash
 bash backup.sh --path /Volumes/External/Media
 bash restore.sh --latest --path /Volumes/External/Media
+bash install.sh --path /Volumes/External/Media --keep 30
+```
+
+If your stack repo is not in the same directory as your media library, also set `--stack-dir`:
+
+```bash
+bash backup.sh --path /Volumes/External/Media --stack-dir ~/mac-media-stack
+bash restore.sh --latest --path /Volumes/External/Media --stack-dir ~/mac-media-stack
+bash install.sh --path /Volumes/External/Media --stack-dir ~/mac-media-stack
 ```
 
 ## Works With
