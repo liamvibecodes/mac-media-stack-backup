@@ -1,0 +1,197 @@
+#!/bin/bash
+# mac-media-stack-backup: backup configs, databases, and compose files
+
+set -euo pipefail
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+CYAN='\033[0;36m'
+NC='\033[0m'
+
+MEDIA_DIR="$HOME/Media"
+KEEP_DAYS=14
+
+usage() {
+    echo "Usage: bash backup.sh [OPTIONS]"
+    echo ""
+    echo "Back up your *arr Docker stack configs, databases, and compose files."
+    echo ""
+    echo "Options:"
+    echo "  --path DIR     Media directory (default: ~/Media)"
+    echo "  --keep DAYS    Days of backups to keep (default: 14)"
+    echo "  --help         Show this help"
+    exit 0
+}
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --path) MEDIA_DIR="$2"; shift 2 ;;
+        --keep) KEEP_DAYS="$2"; shift 2 ;;
+        --help) usage ;;
+        *) echo -e "${RED}ERR${NC} Unknown option: $1"; exit 1 ;;
+    esac
+done
+
+MEDIA_DIR="${MEDIA_DIR/#\~/$HOME}"
+BACKUP_DIR="$MEDIA_DIR/backups"
+LOG_DIR="$MEDIA_DIR/logs"
+TIMESTAMP=$(date +"%Y%m%d-%H%M%S")
+TEMP_DIR=$(mktemp -d)
+BACKUP_NAME="backup-$TIMESTAMP"
+BACKUP_STAGING="$TEMP_DIR/$BACKUP_NAME"
+
+cleanup() {
+    rm -rf "$TEMP_DIR"
+}
+trap cleanup EXIT
+
+echo ""
+echo -e "${CYAN}==============================${NC}"
+echo -e "${CYAN}  Mac Media Stack Backup${NC}"
+echo -e "${CYAN}==============================${NC}"
+echo ""
+echo -e "${CYAN}INF${NC}  Media directory: $MEDIA_DIR"
+echo -e "${CYAN}INF${NC}  Timestamp: $TIMESTAMP"
+echo ""
+
+# Validate media directory
+if [[ ! -d "$MEDIA_DIR" ]]; then
+    echo -e "${RED}ERR${NC}  Media directory not found: $MEDIA_DIR"
+    exit 1
+fi
+
+mkdir -p "$BACKUP_DIR" "$LOG_DIR" "$BACKUP_STAGING"
+
+# ==============================
+# Config files
+# ==============================
+echo -e "${CYAN}--- Config Files ---${NC}"
+CONFIG_COUNT=0
+
+find "$MEDIA_DIR" -maxdepth 3 -type f \( \
+    -name "config.xml" -o \
+    -name "config.yml" -o \
+    -name "settings.json" -o \
+    -name "*.conf" \
+\) ! -path "*/backups/*" ! -path "*/logs/*" 2>/dev/null | while read -r file; do
+    rel_path="${file#$MEDIA_DIR/}"
+    dest_dir="$BACKUP_STAGING/configs/$(dirname "$rel_path")"
+    mkdir -p "$dest_dir"
+    cp "$file" "$dest_dir/"
+    echo -e "${GREEN}OK${NC}   Copied config: $rel_path"
+done
+
+CONFIG_COUNT=$(find "$BACKUP_STAGING/configs" -type f 2>/dev/null | wc -l | tr -d ' ')
+echo -e "${GREEN}OK${NC}   $CONFIG_COUNT config file(s) found"
+echo ""
+
+# ==============================
+# Databases
+# ==============================
+echo -e "${CYAN}--- Databases ---${NC}"
+
+find "$MEDIA_DIR" -maxdepth 3 -type f -name "*.db" \
+    ! -path "*/backups/*" ! -path "*/logs/*" 2>/dev/null | while read -r file; do
+    rel_path="${file#$MEDIA_DIR/}"
+    dest_dir="$BACKUP_STAGING/databases/$(dirname "$rel_path")"
+    mkdir -p "$dest_dir"
+    cp "$file" "$dest_dir/"
+    echo -e "${GREEN}OK${NC}   Copied database: $rel_path"
+done
+
+DB_COUNT=$(find "$BACKUP_STAGING/databases" -type f 2>/dev/null | wc -l | tr -d ' ')
+echo -e "${GREEN}OK${NC}   $DB_COUNT database file(s) found"
+echo ""
+
+# ==============================
+# docker-compose.yml
+# ==============================
+echo -e "${CYAN}--- Compose File ---${NC}"
+
+if [[ -f "$MEDIA_DIR/docker-compose.yml" ]]; then
+    cp "$MEDIA_DIR/docker-compose.yml" "$BACKUP_STAGING/"
+    echo -e "${GREEN}OK${NC}   Copied docker-compose.yml"
+elif [[ -f "$MEDIA_DIR/docker-compose.yaml" ]]; then
+    cp "$MEDIA_DIR/docker-compose.yaml" "$BACKUP_STAGING/"
+    echo -e "${GREEN}OK${NC}   Copied docker-compose.yaml"
+else
+    echo -e "${YELLOW}WRN${NC}  No docker-compose file found in $MEDIA_DIR"
+fi
+echo ""
+
+# ==============================
+# .env (redacted)
+# ==============================
+echo -e "${CYAN}--- Environment File ---${NC}"
+
+if [[ -f "$MEDIA_DIR/.env" ]]; then
+    grep -ivE '(password|key|secret|token)' "$MEDIA_DIR/.env" > "$BACKUP_STAGING/.env.redacted" 2>/dev/null || true
+    REDACTED=$(grep -ciE '(password|key|secret|token)' "$MEDIA_DIR/.env" 2>/dev/null || echo "0")
+    echo -e "${GREEN}OK${NC}   Copied .env ($REDACTED sensitive line(s) redacted)"
+else
+    echo -e "${YELLOW}WRN${NC}  No .env file found"
+fi
+echo ""
+
+# ==============================
+# Container state
+# ==============================
+echo -e "${CYAN}--- Container State ---${NC}"
+
+if command -v docker &>/dev/null; then
+    if docker compose ls &>/dev/null 2>&1; then
+        (cd "$MEDIA_DIR" && docker compose ps 2>/dev/null) > "$BACKUP_STAGING/container-state.txt" || true
+        echo -e "${GREEN}OK${NC}   Captured container state"
+    else
+        echo -e "${YELLOW}WRN${NC}  Docker Compose not available, skipping container state"
+    fi
+else
+    echo -e "${YELLOW}WRN${NC}  Docker not found, skipping container state"
+fi
+echo ""
+
+# ==============================
+# Compress
+# ==============================
+echo -e "${CYAN}--- Compressing ---${NC}"
+
+tar -czf "$BACKUP_DIR/$BACKUP_NAME.tar.gz" -C "$TEMP_DIR" "$BACKUP_NAME"
+BACKUP_SIZE=$(du -sh "$BACKUP_DIR/$BACKUP_NAME.tar.gz" | cut -f1)
+echo -e "${GREEN}OK${NC}   Created $BACKUP_NAME.tar.gz ($BACKUP_SIZE)"
+echo ""
+
+# ==============================
+# Prune old backups
+# ==============================
+echo -e "${CYAN}--- Pruning Old Backups ---${NC}"
+
+PRUNED=0
+find "$BACKUP_DIR" -name "backup-*.tar.gz" -type f -mtime +"$KEEP_DAYS" 2>/dev/null | while read -r old; do
+    rm -f "$old"
+    echo -e "${YELLOW}DEL${NC}  Removed $(basename "$old")"
+    PRUNED=$((PRUNED + 1))
+done
+
+REMAINING=$(find "$BACKUP_DIR" -name "backup-*.tar.gz" -type f 2>/dev/null | wc -l | tr -d ' ')
+echo -e "${GREEN}OK${NC}   $REMAINING backup(s) on disk (keeping $KEEP_DAYS days)"
+echo ""
+
+# ==============================
+# Log
+# ==============================
+echo "$(date '+%Y-%m-%d %H:%M:%S') - Backup completed: $BACKUP_NAME.tar.gz ($BACKUP_SIZE)" >> "$LOG_DIR/backup.log"
+
+# ==============================
+# Summary
+# ==============================
+echo -e "${CYAN}==============================${NC}"
+echo -e "${CYAN}  Backup Complete${NC}"
+echo -e "${CYAN}==============================${NC}"
+echo ""
+echo -e "  Location:  ${GREEN}$BACKUP_DIR/$BACKUP_NAME.tar.gz${NC}"
+echo -e "  Size:      ${GREEN}$BACKUP_SIZE${NC}"
+echo -e "  Configs:   $CONFIG_COUNT"
+echo -e "  Databases: $DB_COUNT"
+echo -e "  Retention: $KEEP_DAYS days"
+echo ""
